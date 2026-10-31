@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- The search line has a border above and below it and a `❯` in place of the `search>`, `folder>`, `rename>` and `export>` labels. The count moved into the bottom border, which frees the row it used (#32).
+- The folder and session ID columns are aligned to the right edge of the terminal.
+
 ## [0.0.12-alpha] - 2026-10-31
 
 ### Added

@@ -564,7 +564,7 @@ func rows(list []*session) []string {
 		if s.pinned {
 			p = "★ "
 		}
-		out[i] = fmt.Sprintf("%s%s  %s%*s  %s%*s  %s", p, date(s), t, tw-width(t), "", c, cw-width(c), "", s.id)
+		out[i] = fmt.Sprintf("%s%s  %s%*s\t%s%*s  %s", p, date(s), t, tw-width(t), "", c, cw-width(c), "", s.id)
 	}
 	return out
 }
@@ -574,7 +574,7 @@ func list(all []*session, n int) {
 	loadAll(sub)
 	w := bufio.NewWriter(os.Stdout)
 	for _, r := range rows(sub) {
-		fmt.Fprintln(w, r)
+		fmt.Fprintln(w, strings.ReplaceAll(r, "\t", "  "))
 	}
 	w.Flush()
 }

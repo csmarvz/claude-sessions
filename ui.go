@@ -163,7 +163,6 @@ func (t *tty) read() string {
 }
 
 type view struct {
-	prompt  string
 	items   []string
 	bold    map[int]bool
 	header  []string
@@ -340,13 +339,14 @@ func (t *tty) draw(v *view) {
 	w, h := t.size()
 	t.w, t.h = w, h
 	var rows []string
-	p := "\x1b[1;38;5;110m" + v.prompt
+	fg := "\x1b[0;39m"
 	if v.dim {
-		p = "\x1b[1;2;38;5;110m" + v.prompt
+		fg = "\x1b[0;2;39m"
 	}
-	rows = append(rows, p+"\x1b[0;1m"+clip(string(v.query), max(0, w-width(v.prompt)))+"\x1b[0m")
-	info := fmt.Sprintf("%d/%d", len(v.shown), len(v.items))
-	rows = append(rows, "  \x1b[38;5;144m"+info+"\x1b[38;5;59m "+strings.Repeat("─", max(0, w-3-len(info)))+"\x1b[0m")
+	info := fmt.Sprintf(" %d/%d ", len(v.shown), len(v.items))
+	rows = append(rows, fg+strings.Repeat("─", w)+"\x1b[0m",
+		fg+"\x1b[1m❯ \x1b[0;1m"+clip(string(v.query), max(0, w-2))+"\x1b[0m",
+		fg+strings.Repeat("─", max(0, w-2-len(info)))+"\x1b[0;38;5;144m"+info+fg+"──\x1b[0m")
 	for _, hd := range v.header {
 		rows = append(rows, "  \x1b[38;5;109m"+clip(hd, w-2)+"\x1b[0m")
 	}
@@ -367,20 +367,31 @@ func (t *tty) draw(v *view) {
 			rows = append(rows, "")
 			continue
 		}
-		s := clip(v.items[v.shown[i]], w-2)
+		s, pos := v.items[v.shown[i]], v.pos[i]
+		if l, r, ok := strings.Cut(s, "\t"); ok {
+			gap, k := max(2, w-2-width(l)-width(r)), utf8.RuneCountInString(l)
+			pos = slices.Clone(pos)
+			for j := range pos {
+				if pos[j] > k {
+					pos[j] += gap - 1
+				}
+			}
+			s = l + strings.Repeat(" ", gap) + r
+		}
+		s = clip(s, w-2)
 		if i == v.sel {
 			bg := "236"
 			if v.warn == red {
 				bg = "52"
 			}
 			rows = append(rows, "\x1b[1;38;5;161;48;5;"+bg+"m▌\x1b[0;48;5;"+bg+"m \x1b[1;38;5;254m"+
-				highlight(s, v.pos[i], "\x1b[38;5;151m", "\x1b[38;5;254m")+strings.Repeat(" ", max(0, w-2-width(s)))+"\x1b[0m")
+				highlight(s, pos, "\x1b[38;5;151m", "\x1b[38;5;254m")+strings.Repeat(" ", max(0, w-2-width(s)))+"\x1b[0m")
 		} else {
 			b := ""
 			if v.bold[v.shown[i]] {
 				b = "\x1b[1m"
 			}
-			rows = append(rows, "\x1b[38;5;236m▌\x1b[0m "+b+highlight(s, v.pos[i], "\x1b[38;5;108m", "\x1b[39m")+"\x1b[0m")
+			rows = append(rows, "\x1b[38;5;236m▌\x1b[0m "+b+highlight(s, pos, "\x1b[38;5;108m", "\x1b[39m")+"\x1b[0m")
 		}
 	}
 
@@ -440,7 +451,7 @@ func (t *tty) draw(v *view) {
 		fmt.Fprintf(b, "\x1b[%d;1H\x1b[K%s", i+1, s)
 	}
 	if !v.dim {
-		fmt.Fprintf(b, "\x1b[1;%dH\x1b[?25h", min(w, width(v.prompt)+width(string(v.query[:v.cur]))+1))
+		fmt.Fprintf(b, "\x1b[2;%dH\x1b[?25h", min(w, 2+width(string(v.query[:v.cur]))+1))
 	}
 	b.Flush()
 }
@@ -550,7 +561,7 @@ func pick(all []*session) {
 	cache := map[string][]line{}
 	loading := map[string]bool{}
 	var shown []*session
-	v := &view{prompt: "search> ", keys: map[string]bool{"ctrl-a": true, "ctrl-d": true, "ctrl-r": true, "ctrl-t": true, "/": true}}
+	v := &view{keys: map[string]bool{"ctrl-a": true, "ctrl-d": true, "ctrl-r": true, "ctrl-t": true, "/": true}}
 	v.preview = func(i int) []line {
 		if i < 0 {
 			return nil
@@ -608,7 +619,7 @@ func pick(all []*session) {
 		pool := pools[mode]
 		loadAll(*pool)
 		if choose {
-			f := &view{prompt: "folder> ", items: folders(*pool), foot: "↑↓ select · ENTER show its sessions · ESC all sessions"}
+			f := &view{items: folders(*pool), foot: "↑↓ select · ENTER show its sessions · ESC all sessions"}
 			k, i := t.run(f)
 			dir = ""
 			if k == "enter" {
@@ -650,9 +661,6 @@ func pick(all []*session) {
 		}
 		if msg != "" {
 			v.header = append(v.header, msg)
-		}
-		if len(v.header) == 0 {
-			v.header = []string{""}
 		}
 		esc, enter, list := "quit", "resume", commands(mode)
 		if mode != "" {
@@ -779,7 +787,7 @@ func pick(all []*session) {
 			}
 		case "ctrl-r":
 			s := shown[i]
-			e := &view{prompt: "rename> ", items: v.items[i : i+1], edit: true, hide: v.hide, query: []rune(s.title),
+			e := &view{items: v.items[i : i+1], edit: true, hide: v.hide, query: []rune(s.title),
 				preview: func(int) []line { return v.preview(i) }, foot: "Type the new title · ENTER save · ESC cancel"}
 			e.cur = len(e.query)
 			msg = ""
@@ -793,7 +801,7 @@ func pick(all []*session) {
 			v.hide = e.hide
 		case "export":
 			s := shown[i]
-			e := &view{prompt: "export> ", items: v.items[i : i+1], edit: true, hide: v.hide, query: []rune(exportName(s)),
+			e := &view{items: v.items[i : i+1], edit: true, hide: v.hide, query: []rune(exportName(s)),
 				preview: func(int) []line { return v.preview(i) }, foot: "Type the path · ENTER save · ESC cancel"}
 			e.cur = len(e.query)
 			msg = ""
@@ -844,7 +852,7 @@ func pick(all []*session) {
 			}
 			lines := []line{{"1;31", "WARNING: this permanently deletes every session below. It cannot be undone."}, {}}
 			for _, r := range rows(bin) {
-				lines = append(lines, line{"", r})
+				lines = append(lines, line{"", strings.ReplaceAll(r, "\t", "  ")})
 			}
 			msg = "Cancelled, nothing was deleted."
 			if ask(red)(fmt.Sprintf("Empty the trash? %sB · Y confirm · any other key cancels", human(total)), lines) {
