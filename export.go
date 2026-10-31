@@ -62,6 +62,13 @@ func exportPath(s *session, path string) (string, error) {
 	if path == "" {
 		return "", errors.New("enter an export path")
 	}
+	return outputPath(path, filepath.Base(exportName(s)))
+}
+
+func outputPath(path, defaultName string) (string, error) {
+	if path == "" {
+		return "", errors.New("enter an output path")
+	}
 	if path == "~" || strings.HasPrefix(path, "~/") || strings.HasPrefix(path, `~\`) {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -74,7 +81,7 @@ func exportPath(s *session, path string) (string, error) {
 		}
 	}
 	if st, err := os.Stat(path); err == nil && st.IsDir() {
-		path = filepath.Join(path, filepath.Base(exportName(s)))
+		path = filepath.Join(path, defaultName)
 	}
 	dir := filepath.Dir(path)
 	st, err := os.Stat(dir)

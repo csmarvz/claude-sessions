@@ -51,6 +51,14 @@ Two things follow from that. Moving a session is a rename, which only works with
 
 The sessions of the config it runs with: `~/.claude`, or `CLAUDE_CONFIG_DIR` when it is set. The archive and the trash are shared between configs, as described above.
 
+## Does a backup contain the whole session?
+
+A ZIP backup includes the same four session parts described above, with raw bytes and saved category/pin state. It does not include global prompt history or the source project's working files. A backup of a running session is a best-effort live copy, not a coordinated snapshot of all files. Windows requires detected running sessions to be closed to avoid blocking compaction. Pin maintenance runs before backup and can recreate missing live files.
+
+## What happens if backup restore fails?
+
+Validation and conflict decisions happen before changing sessions. Before an approved overwrite, the old session moves to trash for 30 days; an occupied recovery location prevents that overwrite. If installing the new data fails, the old content remains in trash and the error reports how to recover it. A trash restore returns an ordinary live session, without its former archive/pin state. The program does not promise automatic recovery from a crash or power loss.
+
 ## Does it work on macOS and Windows?
 
 The releases include builds for both, but only the Linux build has been tested so far. On Windows, claude-resume stays open while the resumed Claude Code runs and exits when it ends. If you try either, please [open an issue](https://github.com/csmarvz/claude-resume/issues) to say whether it works.

@@ -22,19 +22,21 @@ import (
 	"golang.org/x/term"
 )
 
-const usageText = `usage: claude-resume                       pick a session, or list the last 10 outside a terminal
-       claude-resume -a                    list all sessions (--all)
-       claude-resume <id>                  resume a session in its folder (a unique ID prefix is enough)
-       claude-resume -r <id> <title>       rename a session (--rename)
-       claude-resume --export <id> [path]  save a session's prompts and replies as Markdown
-       claude-resume -d [-y] <id>          move a session to the trash for 30 days; asks first unless -y (--delete, --yes)
-       claude-resume --archive <id>        archive a session so that it never expires
-       claude-resume --restore <id>        move an archived or deleted session back to the session list
-       claude-resume --pin <id>            keep a session at the top of the list and safe from Claude Code's cleanup
-       claude-resume --unpin <id>          unpin a session
-       claude-resume update                install the latest release
-       claude-resume -v                    show the installed version (--version)
-       claude-resume -h                    show the command-line help (--help)
+const usageText = `usage: claude-resume                           pick a session, or list the last 10 outside a terminal
+       claude-resume -a                        list all sessions (--all)
+       claude-resume <id>                      resume a session in its folder (a unique ID prefix is enough)
+       claude-resume -r <id> <title>           rename a session (--rename)
+       claude-resume --export <id> [path]      save a session's prompts and replies as Markdown
+       claude-resume --backup <zip> [<id>...]  back up explicit sessions, or all live sessions
+       claude-resume --restore-backup <zip>    restore sessions from a backup
+       claude-resume -d [-y] <id>              move a session to the trash for 30 days; asks first unless -y (--delete, --yes)
+       claude-resume --archive <id>            archive a session so that it never expires
+       claude-resume --restore <id>            move an archived or deleted session back to the session list
+       claude-resume --pin <id>                keep a session at the top of the list and safe from Claude Code's cleanup
+       claude-resume --unpin <id>              unpin a session
+       claude-resume update                    install the latest release
+       claude-resume -v                        show the installed version (--version)
+       claude-resume -h                        show the command-line help (--help)
 `
 
 var (
@@ -142,6 +144,15 @@ func main() {
 		update()
 		return
 	case arg == "" || arg == "-a" || arg == "--all":
+	case arg == "--backup" || arg == "--restore-backup":
+		if len(args) < 3 || args[1] == "" || (arg == "--restore-backup" && len(args) != 3) {
+			usage(1)
+		}
+		for _, id := range args[2 : len(args)-1] {
+			if !isHex(id) {
+				usage(1)
+			}
+		}
 	case arg == "--export":
 		if target = args[1]; (len(args) != 3 && len(args) != 4) || !isHex(target) {
 			usage(1)
@@ -192,13 +203,19 @@ func main() {
 	if abs, err := filepath.Abs(config); err == nil {
 		config = abs
 	}
-	if st, err := os.Stat(config); (err != nil || !st.IsDir()) && !(arg == "--export" && errors.Is(err, fs.ErrNotExist)) {
+	if st, err := os.Stat(config); (err != nil || !st.IsDir()) && !((arg == "--export" || arg == "--backup" || arg == "--restore-backup" || arg == "") && errors.Is(err, fs.ErrNotExist)) {
 		die("no sessions found in %s", shown)
 	}
 	projects = filepath.Join(config, "projects")
 	archived = filepath.Join(home, ".claude-resume", "archive")
 	trash = filepath.Join(home, ".claude-resume", "trash")
 	pinned = filepath.Join(home, ".claude-resume", "pinned")
+	if arg == "--backup" || arg == "--restore-backup" {
+		if err := backupCLI(arg, args[1], args[2:len(args)-1]); err != nil {
+			die("%s", printable(err.Error()))
+		}
+		return
+	}
 	if arg == "--export" {
 		all := append(scan(projects), scan(filepath.Join(archived, "projects"))...)
 		all = append(all, scan(filepath.Join(trash, "projects"))...)
@@ -236,7 +253,7 @@ func main() {
 		keep(all)
 	}
 	order(all)
-	if len(all) == 0 && arg != "--restore" && (arg != "" || len(scan(filepath.Join(archived, "projects"))) == 0) {
+	if len(all) == 0 && arg != "--restore" && arg != "" {
 		die("no sessions found in %s", projects)
 	}
 
@@ -920,16 +937,44 @@ func order(list []*session) {
 
 func link(id, folder string) (bool, error) {
 	live, pin, back := parts(config, folder, id), parts(pinned, folder, id), false
+	for i, p := range append(slices.Clone(live), pin...) {
+		store := config
+		if i >= len(live) {
+			store = pinned
+		}
+		if err := backupNoLinks(p, store); err != nil {
+			return false, err
+		}
+	}
 	for i := range live {
 		rels := map[string]bool{}
 		for _, top := range []string{live[i], pin[i]} {
-			filepath.WalkDir(top, func(p string, d fs.DirEntry, err error) error {
+			err := filepath.WalkDir(top, func(p string, d fs.DirEntry, err error) error {
+				if errors.Is(err, fs.ErrNotExist) {
+					return nil
+				}
+				if err != nil {
+					return err
+				}
+				if d.Type()&os.ModeSymlink != 0 {
+					return fmt.Errorf("linked pin data is not supported: %s", p)
+				}
 				if err == nil && !d.IsDir() {
+					info, err := d.Info()
+					if err != nil {
+						return err
+					}
+					if !info.Mode().IsRegular() {
+						return fmt.Errorf("unsupported pin data: %s", p)
+					}
 					rel, _ := filepath.Rel(top, p)
 					rels[rel] = true
 				}
 				return nil
 			})
+			if err != nil {
+				return back, err
+			}
 		}
 		restored := false
 		for rel := range rels {
@@ -963,12 +1008,25 @@ func link(id, folder string) (bool, error) {
 }
 
 func keep(all []*session) bool {
+	back, err := keepChecked(all)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "claude-resume: could not keep pinned sessions: %v\n", err)
+	}
+	return back
+}
+
+func keepChecked(all []*session) (bool, error) {
+	pins, err := backupScan(pinned)
+	if err != nil {
+		return false, err
+	}
 	byID := map[string][]*session{}
 	for _, s := range all {
 		byID[s.id] = append(byID[s.id], s)
 	}
 	back := false
-	for _, p := range scan(filepath.Join(pinned, "projects")) {
+	var failed error
+	for _, p := range pins {
 		f := folder(p)
 		var live *session
 		for _, s := range byID[p.id] {
@@ -985,14 +1043,14 @@ func keep(all []*session) bool {
 		}
 		b, err := link(p.id, f)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "claude-resume: could not keep pinned session %s: %v\n", p.id, err)
+			failed = errors.Join(failed, fmt.Errorf("session %s: %w", p.id, err))
 		}
 		if live != nil {
 			live.pinned = true
 		}
 		back = back || b
 	}
-	return back
+	return back, failed
 }
 
 func pin(s *session) (string, bool) {

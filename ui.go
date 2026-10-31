@@ -171,6 +171,7 @@ type view struct {
 	preview func(i int) []line
 	keys    map[string]bool
 	edit    bool
+	fixed   bool
 	warn    string
 
 	query     []rune
@@ -184,7 +185,7 @@ type view struct {
 
 func (v *view) filter() {
 	terms := strings.Fields(string(v.query))
-	if v.edit {
+	if v.edit || v.fixed {
 		terms = nil
 	}
 	v.shown, v.pos = v.shown[:0], v.pos[:0]
@@ -205,6 +206,9 @@ func (t *tty) run(v *view) (string, int) {
 			t.draw(v)
 		}
 		k := t.read()
+		if v.fixed && !slices.Contains([]string{"", "wake", "esc", "enter", "up", "down", "pgup", "pgdn", "shift-up", "shift-down", "ctrl-space"}, k) {
+			continue
+		}
 		redraw = k != ""
 		n := len(v.shown)
 		edited := false
@@ -487,6 +491,8 @@ var cmds = map[string][]command{
 }
 
 var lists = []command{
+	{"/backup-all", "backup-all", "back up all live sessions as a ZIP"},
+	{"/restore-backup", "restore-backup", "restore sessions from a ZIP backup"},
 	{"/list-sessions", "list:", "show the sessions"},
 	{"/list-archives", "list:archive", "show the archived sessions"},
 	{"/list-deleted", "list:trash", "show the deleted sessions"},
@@ -509,6 +515,7 @@ var shortcuts = [][2]string{
 
 func commands(mode string) []command {
 	list := slices.Clone(cmds[mode])
+	list = append(list, command{"/backup", "backup", "back up the selected session as a ZIP"})
 	for _, c := range lists {
 		if c.key != "list:"+mode {
 			list = append(list, c)
@@ -549,6 +556,7 @@ func pick(all []*session) {
 	var mu sync.Mutex
 	cache := map[string][]line{}
 	loading := map[string]bool{}
+	previewGeneration := 0
 	var shown []*session
 	v := &view{prompt: "search> ", keys: map[string]bool{"ctrl-a": true, "ctrl-d": true, "ctrl-r": true, "ctrl-t": true, "/": true}}
 	v.preview = func(i int) []line {
@@ -563,10 +571,13 @@ func pick(all []*session) {
 		}
 		if !loading[s.path] {
 			loading[s.path] = true
+			generation := previewGeneration
 			go func() {
 				l := preview(s)
 				mu.Lock()
-				cache[s.path] = l
+				if generation == previewGeneration {
+					cache[s.path] = l
+				}
 				mu.Unlock()
 				t.poke()
 			}()
@@ -672,7 +683,9 @@ func pick(all []*session) {
 		k, i := t.run(v)
 		exported = ""
 		if k == "/" && i < 0 {
-			list = slices.DeleteFunc(list, func(c command) bool { return !strings.HasPrefix(c.key, "list:") && c.key != "exit" && c.key != "help" })
+			list = slices.DeleteFunc(list, func(c command) bool {
+				return !strings.HasPrefix(c.key, "list:") && c.key != "exit" && c.key != "help" && c.key != "backup-all" && c.key != "restore-backup"
+			})
 		}
 		if k == "/" && i >= 0 && mode == "" {
 			c := command{"/pin", "pin", "keep the session at the top, safe from Claude Code's cleanup (CTRL-T)"}
@@ -698,6 +711,20 @@ func pick(all []*session) {
 			continue
 		}
 		switch k {
+		case "backup", "backup-all", "restore-backup":
+			var selected *session
+			if k == "backup" {
+				selected = shown[i]
+			}
+			msg = t.backupDialog(k, selected)
+			all, arch, bin = scan(projects), scan(filepath.Join(archived, "projects")), scan(filepath.Join(trash, "projects"))
+			keep(all)
+			order(all)
+			mu.Lock()
+			cache = map[string][]line{}
+			loading = map[string]bool{}
+			previewGeneration++
+			mu.Unlock()
 		case "esc":
 			if dir != "" {
 				choose = true

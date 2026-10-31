@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- ZIP session backup and restore (#10): `/backup`, `/backup-all`, `--backup <zip> [<id>...]`, and `/restore-backup` or `--restore-backup <zip>`. Backups preserve raw session data, category, and pin state. Restore validates archives, compares conflicts, skips duplicate IDs, and preserves overwritten originals in trash. Detected running Windows sessions must be closed; other platforms warn that live copies are not consistent snapshots.
+
 ## [0.0.12-alpha] - 2026-10-31
 
 ### Added

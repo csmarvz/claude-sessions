@@ -34,6 +34,8 @@ claude-resume -a                    list all sessions (--all)
 claude-resume <id>                  resume a session in its folder (a unique ID prefix is enough)
 claude-resume -r <id> <title>       rename a session (--rename)
 claude-resume --export <id> [path]  save a session's prompts and replies as Markdown
+claude-resume --backup <zip> [<id>...]  back up explicit sessions, or all live sessions
+claude-resume --restore-backup <zip>   restore sessions from a backup
 claude-resume -d <id>               move a session to the trash after a confirmation (--delete)
 claude-resume -d -y <id>            move it without asking; needs the full session ID (--yes)
 claude-resume --archive <id>        archive a session so that it never expires
@@ -68,6 +70,18 @@ Renaming writes the same title record as `/rename` in Claude Code. Sessions that
 `claude-resume --export <id> [path]` does the same from the command line; omit the path to use the suggested filename. Both entry points expand `~` to your home directory and accept a folder to save the suggested filename inside it. Overwriting requires an interactive terminal. Missing or ambiguous IDs are refused.
 
 Exports contain user prompts and Claude's text replies in order, without shortening or removing repeated messages. Consecutive text from the same role shares a heading. Tool calls/results, thinking, images and internal records (including task notifications, slash-command/skill records, and shell-command records) are left out. Malformed transcript lines are skipped. Running sessions can be exported; the export reads through one open transcript handle and can include messages appended while it is reading. On Unix, exports use owner-only read/write permissions (0600), including when replacing an existing file, because transcripts can contain private prompts.
+
+## Backing up and restoring sessions
+
+`/backup` saves the selected live, archived, or deleted session in a ZIP. `/backup-all` backs up every live session, including pinned sessions, regardless of search or folder filters. Both suggest a timestamped filename in the current folder and accept a different filename or an existing destination folder. Existing ZIPs require confirmation before replacement.
+
+`claude-resume --backup <zip> <id>...` backs up explicit IDs; omit the IDs to back up all live sessions. Ambiguous IDs are refused. ZIPs contain raw transcripts, subagent/tool-output files, file history, session environment data, and a versioned manifest recording category and pin state. They are different from readable Markdown exports. Pin reconciliation runs first and may recover missing live files; its errors stop the backup. Backup commands do not purge the trash.
+
+`/restore-backup` or `claude-resume --restore-backup <zip>` validates and stages the ZIP before changing sessions. Sessions return to their saved categories; live sessions go into the current Claude config. Pins are rebuilt. Live and deleted sessions receive fresh cleanup dates; archived sessions keep their dates. Duplicate IDs across project folders are skipped and reported so shared auxiliary data is not overwritten.
+
+Before overwriting, compare both sessions' date, size, and last reply, then choose Skip, Overwrite, or Cancel. All choices are collected before installation; Cancel leaves sessions unchanged. Approved originals move to the trash for 30 days. If that would overwrite another trash copy, including an existing trash-category destination, the replacement is skipped. If installation fails, the original stays in trash and the error explains recovery through `/list-deleted`. That recovers ordinary live content, not its previous category or pin state. Earlier completed restores remain in place if a later one fails. Noninteractive commands refuse overwrites that require confirmation.
+
+On Linux and macOS, detected running sessions produce a best-effort live-copy warning: the files may come from different moments, and raw bytes may include an incomplete final record. No snapshot consistency is promised. Close sessions for a reliable backup. On Windows, detected running sessions must be closed because an open reader can block Claude Code's compaction rename. Restoring over detected running sessions is always refused. Process detection is advisory, not a lock.
 
 ## Pinning sessions
 
